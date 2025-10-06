@@ -1,0 +1,105 @@
+{
+  "name": "Assignment Analysis Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "assignment-upload",
+        "responseMode": "lastNode",
+        "responseData": "allEntries"
+      },
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const fs = require('fs');\nconst pdfParse = require('pdf-parse');\nconst mammoth = require('mammoth');\n\nlet filePath = $json[\"file_path\"];\nlet ext = filePath.split('.').pop().toLowerCase();\n\nlet text = '';\nif(ext === 'pdf') {\n    const dataBuffer = fs.readFileSync(filePath);\n    let result = await pdfParse(dataBuffer);\n    text = result.text;\n} else if(ext === 'docx' || ext === 'doc') {\n    let result = await mammoth.extractRawText({ path: filePath });\n    text = result.value;\n}\n\nreturn [{ json: { content: text, student_id: $json.student_id, assignment_id: $json.assignment_id } }];"
+      },
+      "name": "Text Extraction",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/sources",
+        "method": "GET",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "options": {},
+        "queryParametersUi": {
+          "parameter": [
+            {
+              "name": "query",
+              "value": "={{$json[\"content\"]}}"
+            }
+          ]
+        }
+      },
+      "name": "RAG Source Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4",
+        "prompt": "Analyze this assignment text and provide:\n1. Topic & key themes\n2. Research questions\n3. Academic level\n4. Suggested sources from the retrieved RAG results\n5. Recommended citation format\n\nAssignment Text:\n{{$json[\"content\"]}}\nRAG Sources:\n{{$json[\"body\"]}}",
+        "temperature": 0.2,
+        "maxTokens": 1000
+      },
+      "name": "AI Analysis",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const similarityThreshold = 0.7;\nconst embeddings = $json[\"body\"];\nlet flags = [];\nembeddings.forEach(e => {\n  if(e.similarity >= similarityThreshold){\n    flags.push({ source: e.title, similarity: e.similarity });\n  }\n});\nreturn [{ json: { plagiarism_flags: flags, student_id: $json.student_id, assignment_id: $json.assignment_id, content: $json.content, analysis: $json.analysis } }];"
+      },
+      "name": "Plagiarism Detection",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "analysis_results",
+        "columns": [
+          { "name": "assignment_id", "value": "={{$json.assignment_id}}" },
+          { "name": "student_id", "value": "={{$json.student_id}}" },
+          { "name": "content", "value": "={{$json.content}}" },
+          { "name": "analysis", "value": "={{$json.analysis}}" },
+          { "name": "plagiarism_flags", "value": "={{$json.plagiarism_flags}}" }
+        ]
+      },
+      "name": "Store Results",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#instructors",
+        "text": "New assignment analysis completed for student {{$json.student_id}}. Assignment ID: {{$json.assignment_id}}"
+      },
+      "name": "Slack Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1750, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{"node": "Text Extraction","type": "main","index": 0}]] },
+    "Text Extraction": { "main": [[{"node": "RAG Source Search","type": "main","index": 0}]] },
+    "RAG Source Search": { "main": [[{"node": "AI Analysis","type": "main","index": 0}]] },
+    "AI Analysis": { "main": [[{"node": "Plagiarism Detection","type": "main","index": 0}]] },
+    "Plagiarism Detection": { "main": [[{"node": "Store Results","type": "main","index": 0},{"node": "Slack Notification","type": "main","index": 0}]] }
+  }
+}
+
