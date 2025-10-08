@@ -64,20 +64,21 @@ def login(form_data: OAuth2PasswordRequestForm = Depends()):
 # -------------------
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 
+# -------------------
+# Assignment Upload Endpoint
+# -------------------
 @app.post("/assignments/upload")
 async def upload_assignment(file: UploadFile = File(...)):
-    # Read file content
-    file_content = await file.read()
+    try:
+        file_content = await file.read()
+        async with httpx.AsyncClient() as client:
+            files = {"file": (file.filename, file_content, file.content_type)}
+            response = await client.post(N8N_WEBHOOK_URL, files=files)
+            response.raise_for_status()
+        return {"status": "success", "message": "File sent to n8n", "n8n_response": response.text}
+    except Exception as e:
+        return {"status": "error", "details": str(e)}
 
-    # Send to n8n webhook
-    async with httpx.AsyncClient() as client:
-        files = {"file": (file.filename, file_content, file.content_type)}
-        response = await client.post(N8N_WEBHOOK_URL, files=files)
-
-    if response.status_code == 200:
-        return {"status": "success", "message": "File sent to n8n"}
-    else:
-        return {"status": "error", "details": response.text}
 
 @app.get("/analysis/{assignment_id}")
 def get_analysis(assignment_id: int, token: str = Depends(oauth2_scheme)):
@@ -95,4 +96,15 @@ async def get_sources(query: str = Query(..., description="Assignment topic or t
         raise HTTPException(status_code=404, detail="No sources found")
     return {"query": query, "sources": results}
 
+# -------------------
+# Root Endpoint
+# -------------------
+@app.get("/")
+def root():
+    return {"message": "Academic Assignment Helper is running 🚀"}
+
+# -------------------
+# Run Command
+# -------------------
+# Run using: uvicorn main:app --reload
 
